@@ -4,12 +4,10 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
 	"os/user"
-	"strconv"
 	"strings"
 
 	libvirt "github.com/libvirt/libvirt-go"
@@ -30,7 +28,7 @@ func main() {
 		},
 		{
 			Name:   "rm",
-			Usage:  "remove node [ID]",
+			Usage:  "remove node [ID's]",
 			Action: removeNodeCommand,
 		},
 	}
@@ -50,53 +48,6 @@ func main() {
 
 }
 
-func removeNodeCommand(c *cli.Context) error {
-	argsPresent := c.Args().Present()
-	workingDirectory := getProjectDir(c)
-
-	conn, err := libvirt.NewConnect("qemu:///session")
-
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer conn.Close()
-
-	if !argsPresent {
-		return removeAllNodes(workingDirectory, conn)
-	}
-
-	i := 0
-	arg := c.Args().Get(i)
-	nodeNumbers := make(map[string]bool)
-	for arg != "" {
-		nodeNumbers[arg] = true
-	}
-	return removeNodes(conn, workingDirectory, nodeNumbers)
-}
-
-func removeNodes(conn *libvirt.Connect, workDir string, nodeNumbers map[string]bool) error {
-	return forEachNode(conn, func(dom *libvirt.Domain, name, nodeNumber string) error {
-		if _, ok := nodeNumbers[nodeNumber]; !ok {
-			return nil
-		}
-		return removeNode(dom, name, workDir)
-	})
-}
-
-func removeNode(dom *libvirt.Domain, name, workDir string) error {
-	err := dom.Destroy()
-	if err != nil {
-		return err
-	}
-
-	err = dom.Undefine()
-	if err != nil {
-		return err
-	}
-	nodePath := fmt.Sprintf("%s/images/%s", workDir, name)
-	return os.RemoveAll(nodePath)
-}
-
 func getProjectDir(c *cli.Context) string {
 	dir := c.String("dir")
 	if dir == "" {
@@ -114,97 +65,6 @@ func getProjectDir(c *cli.Context) string {
 		log.Fatal(err)
 	}
 	return dir
-}
-
-func removeAllNodes(workingDirectory string, conn *libvirt.Connect) error {
-	return forEachNode(conn, func(dom *libvirt.Domain, name, nodeNumber string) error {
-		return removeNode(dom, name, workingDirectory)
-	})
-}
-
-func addNode(c *cli.Context) error {
-	conn, err := libvirt.NewConnect("qemu:///session")
-
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer conn.Close()
-
-	workerCount := 1
-	err = forEachNode(conn, func(dom *libvirt.Domain, name, nodeNumber string) error {
-		if strings.HasPrefix(name, "atomic-host") {
-			workerCount++
-		}
-		return nil
-	})
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	dir, err := os.Getwd()
-	if err != nil {
-		panic(err)
-	}
-
-	nodeDir := fmt.Sprintf("%s/images/atomic-host%d", dir, workerCount)
-	err = os.MkdirAll(nodeDir, os.ModePerm)
-	if err != nil {
-		log.Println("could not create node directory " + nodeDir)
-		log.Fatal(err)
-	}
-
-	basePath := fmt.Sprintf("%s/base/CentOS-Atomic-Host-7-GenericCloud.qcow2", dir)
-	destPath := fmt.Sprintf("%s/image.qcow2", nodeDir)
-	err = cp(basePath, destPath)
-	if err != nil {
-		log.Println("could not copy base image")
-		log.Fatal(err)
-	}
-
-	usr, err := user.Current()
-	if err != nil {
-		log.Fatal(err)
-	}
-	sshPublicKeyFile := fmt.Sprintf("%s/.ssh/id_rsa.pub", usr.HomeDir)
-	sshPublicKey, err := ioutil.ReadFile(sshPublicKeyFile)
-
-	userDataFile := fmt.Sprintf("%s/user-data", nodeDir)
-	writeOrFail(userDataFile,
-		"#cloud-config",
-		"password: atomic",
-		"ssh_pwauth: True",
-		"chpasswd: { expire: False }",
-		"ssh_authorized_keys:",
-		fmt.Sprintf("  - %s", sshPublicKey),
-	)
-
-	metaDataFile := fmt.Sprintf("%s/meta-data", nodeDir)
-
-	writeOrFail(metaDataFile,
-		fmt.Sprintf("instance-id: atomic-host%d", workerCount),
-		fmt.Sprintf("local-hostname: atomic%d", workerCount),
-	)
-
-	isoPath := fmt.Sprintf("%s/init.iso", nodeDir)
-	execOrFail("genisoimage",
-		"-output", isoPath,
-		"-volid", "cidata", "-joliet", "-rock",
-		userDataFile, metaDataFile,
-	)
-	execOrFail("virt-install",
-		"--name", "atomic-host"+strconv.Itoa(workerCount),
-		"--ram", "4096",
-		"--vcpus", "4",
-		"--disk", fmt.Sprintf("path=%s", destPath),
-		"--os-type", "linux",
-		"--os-variant", "rhel-atomic-7.2",
-		"--network", "bridge=bridge0",
-		"--graphics", fmt.Sprintf("vnc,listen=127.0.0.1,port=590%d", workerCount),
-		"--cdrom", fmt.Sprintf("%s/init.iso", nodeDir),
-		"--noautoconsole",
-	)
-	return nil
 }
 
 func execOrFail(cmdStr string, args ...string) {
