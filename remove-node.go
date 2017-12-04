@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+
+	libvirt "github.com/libvirt/libvirt-go"
+	"github.com/urfave/cli"
 )
 
 func removeNodeCommand(c *cli.Context) error {

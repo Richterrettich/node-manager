@@ -8,7 +8,6 @@ import (
 )
 
 func main() {
-
 	app := cli.NewApp()
 
 	app.Name = "node-manager"
@@ -23,6 +22,17 @@ func main() {
 			Name:   "rm",
 			Usage:  "remove node [ID's]",
 			Action: removeNodeCommand,
+		},
+		{
+			Name:   "init",
+			Usage:  "initiaizes the node manager",
+			Action: initNodeManagerCommand,
+			Flags: []cli.Flag{
+				cli.BoolFlag{
+					Name:  "force, f",
+					Usage: "Force the re initialization",
+				},
+			},
 		},
 	}
 

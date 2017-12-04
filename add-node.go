@@ -21,7 +21,13 @@ func addNode(c *cli.Context) error {
 	defer conn.Close()
 	workerCount := 1
 	err = forEachNode(conn, func(dom *libvirt.Domain, name, nodeNumber string) error {
-		workerCount++
+		number, err := strconv.Atoi(nodeNumber)
+		if err != nil {
+			return err
+		}
+		if number >= workerCount {
+			workerCount = number + 1
+		}
 		return nil
 	})
 

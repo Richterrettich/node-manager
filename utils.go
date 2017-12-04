@@ -137,15 +137,21 @@ func (i *IndexEntry) Download(workDir string) error {
 	}
 
 	shaSink := sha256.New()
-	teeReader := io.TeeReader(resp.Body, shaSink)
+	contentLength, err := strconv.Atoi(resp.Header.Get("Content-Length"))
+	if err != nil {
+		return err
+	}
+	progressWriter := newProgressWriter(contentLength)
+	progressAndShaWriter := io.MultiWriter(shaSink, progressWriter)
+	teeReader := io.TeeReader(resp.Body, progressAndShaWriter)
 	_, err = io.Copy(baseImageFile, teeReader)
-	actualSha := shaSink.Sum(nil)
-	if string(actualSha) != i.shaSum {
+	actualSha := fmt.Sprintf("%x", shaSink.Sum(nil))
+	if actualSha != i.shaSum {
 		err := os.Remove(path)
 		if err != nil {
 			log.Printf("could not delete file %s. Manual cleanup necessary.\n", path)
 		}
-		return fmt.Errorf("Downloaded has a different sha value then the index suggests.\n This means, someone has tempered with the image.\n actual sha: %s\n expected sha: %s", string(actualSha), i.shaSum)
+		return fmt.Errorf("Downloaded has a different sha value then the index suggests.\n This means, someone has tempered with the image.\n actual sha: %s\n expected sha: %s", actualSha, i.shaSum)
 	}
 
 	return nil
@@ -216,4 +222,34 @@ func getVersion(name string) (int, error) {
 		return -1, fmt.Errorf("invalid version")
 	}
 	return strconv.Atoi(version)
+}
+
+type ProgressWriter struct {
+	totalSize             int
+	downloadedAmount      int
+	lastPrintedPercentage float64
+}
+
+func (p *ProgressWriter) Write(data []byte) (int, error) {
+	amount := len(data)
+	p.downloadedAmount += amount
+	percentage := float64(p.downloadedAmount) / float64(p.totalSize) * 100
+
+	if percentage-p.lastPrintedPercentage > 5 || percentage == 100 {
+		fmt.Printf("%.2f%%\n", percentage)
+		p.lastPrintedPercentage = percentage
+	}
+	return amount, nil
+}
+
+func newProgressWriter(totalSize int) *ProgressWriter {
+	return &ProgressWriter{
+		totalSize:             totalSize,
+		downloadedAmount:      0,
+		lastPrintedPercentage: 0,
+	}
+}
+
+func round(x, unit float64) float64 {
+	return float64(int64(x/unit+0.5)) * unit
 }
