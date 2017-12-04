@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/user"
 	"strconv"
-	"strings"
 
 	libvirt "github.com/libvirt/libvirt-go"
 	"github.com/urfave/cli"
@@ -20,12 +19,9 @@ func addNode(c *cli.Context) error {
 		log.Fatal(err)
 	}
 	defer conn.Close()
-
 	workerCount := 1
 	err = forEachNode(conn, func(dom *libvirt.Domain, name, nodeNumber string) error {
-		if strings.HasPrefix(name, "atomic-host") {
-			workerCount++
-		}
+		workerCount++
 		return nil
 	})
 
@@ -91,6 +87,7 @@ func addNode(c *cli.Context) error {
 		"--os-type", "linux",
 		"--os-variant", "rhel-atomic-7.2",
 		"--network", "bridge=bridge0",
+		"--network", "default",
 		"--graphics", fmt.Sprintf("vnc,listen=127.0.0.1,port=590%d", workerCount),
 		"--cdrom", fmt.Sprintf("%s/init.iso", nodeDir),
 		"--noautoconsole",
