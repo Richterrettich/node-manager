@@ -45,6 +45,7 @@ func initNodeManagerCommand(c *cli.Context) error {
 
 	latest := indexEntries[len(indexEntries)-1]
 
+	fmt.Println("Downloading " + latest.fileName)
 	return latest.Download(workDir)
 }
 

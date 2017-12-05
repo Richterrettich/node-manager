@@ -24,6 +24,12 @@ func main() {
 			Action: removeNodeCommand,
 		},
 		{
+			Name:   "ls",
+			Usage:  "list nodes",
+			Action: listNodesCommand,
+		},
+
+		{
 			Name:   "init",
 			Usage:  "initiaizes the node manager",
 			Action: initNodeManagerCommand,

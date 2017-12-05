@@ -19,31 +19,16 @@ import (
 
 const BASE_URL = "http://cloud.centos.org/centos/7/atomic/images/"
 
-func execOrFail(cmdStr string, args ...string) {
+func run(cmdStr string, args ...string) error {
 	cmd := exec.Command(cmdStr, args...)
 	stdoutAndErr, err := cmd.CombinedOutput()
 	fmt.Printf("%s\n", stdoutAndErr)
-	if err != nil {
-		log.Fatal(err)
-	}
+	return err
 }
 
-func writeOrFail(location string, lines ...string) {
-	f, err := os.Create(location)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	w := bufio.NewWriter(f)
-
-	for _, line := range lines {
-		fmt.Fprintln(w, line)
-	}
-
-	err = w.Flush()
-	if err != nil {
-		log.Fatal(err)
-	}
+func writeFile(location string, lines ...string) error {
+	content := strings.Join(lines, "\n")
+	return writeToFile(strings.NewReader(content), location)
 }
 
 func forEachNode(conn *libvirt.Connect, callback nodeCallback) error {
@@ -70,6 +55,20 @@ func forEachNode(conn *libvirt.Connect, callback nodeCallback) error {
 	return nil
 }
 
+func writeToFile(src io.Reader, dst string) error {
+
+	out, err := os.Create(dst)
+
+	if err != nil {
+		return err
+	}
+
+	defer out.Close()
+
+	_, err = io.Copy(out, src)
+
+	return err
+}
 func cp(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -77,17 +76,7 @@ func cp(src, dst string) error {
 	}
 	defer in.Close()
 
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	_, err = io.Copy(out, in)
-	if err != nil {
-		return err
-	}
-	return out.Close()
+	return writeToFile(in, dst)
 }
 
 func getProjectDir(c *cli.Context) string {

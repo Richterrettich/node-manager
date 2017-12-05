@@ -1,12 +1,14 @@
 package main
 
 import (
+	"compress/gzip"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
 	"os/user"
 	"strconv"
+	"sync"
 
 	libvirt "github.com/libvirt/libvirt-go"
 	"github.com/urfave/cli"
@@ -35,57 +37,34 @@ func addNode(c *cli.Context) error {
 		log.Fatal(err)
 	}
 
-	dir, err := os.Getwd()
-	if err != nil {
-		panic(err)
-	}
+	errors := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	dir := getProjectDir(c)
 
 	nodeDir := fmt.Sprintf("%s/images/atomic-host%d", dir, workerCount)
+
 	err = os.MkdirAll(nodeDir, os.ModePerm)
 	if err != nil {
 		log.Println("could not create node directory " + nodeDir)
 		log.Fatal(err)
 	}
 
-	basePath := fmt.Sprintf("%s/base/CentOS-Atomic-Host-7-GenericCloud.qcow2", dir)
 	destPath := fmt.Sprintf("%s/image.qcow2", nodeDir)
-	err = cp(basePath, destPath)
-	if err != nil {
-		log.Println("could not copy base image")
-		log.Fatal(err)
+
+	go unpackDisk(dir, destPath, &wg, errors)
+	go prepareIso(nodeDir, workerCount, &wg, errors)
+
+	wg.Wait()
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			return err
+		}
 	}
 
-	usr, err := user.Current()
-	if err != nil {
-		log.Fatal(err)
-	}
-	sshPublicKeyFile := fmt.Sprintf("%s/.ssh/id_rsa.pub", usr.HomeDir)
-	sshPublicKey, err := ioutil.ReadFile(sshPublicKeyFile)
-
-	userDataFile := fmt.Sprintf("%s/user-data", nodeDir)
-	writeOrFail(userDataFile,
-		"#cloud-config",
-		"password: atomic",
-		"ssh_pwauth: True",
-		"chpasswd: { expire: False }",
-		"ssh_authorized_keys:",
-		fmt.Sprintf("  - %s", sshPublicKey),
-	)
-
-	metaDataFile := fmt.Sprintf("%s/meta-data", nodeDir)
-
-	writeOrFail(metaDataFile,
-		fmt.Sprintf("instance-id: atomic-host%d", workerCount),
-		fmt.Sprintf("local-hostname: atomic%d", workerCount),
-	)
-
-	isoPath := fmt.Sprintf("%s/init.iso", nodeDir)
-	execOrFail("genisoimage",
-		"-output", isoPath,
-		"-volid", "cidata", "-joliet", "-rock",
-		userDataFile, metaDataFile,
-	)
-	execOrFail("virt-install",
+	err = run("virt-install",
 		"--name", "atomic-host"+strconv.Itoa(workerCount),
 		"--ram", "4096",
 		"--vcpus", "4",
@@ -94,9 +73,93 @@ func addNode(c *cli.Context) error {
 		"--os-variant", "rhel-atomic-7.2",
 		"--network", "bridge=bridge0",
 		"--network", "default",
+		"--virt-type", "kvm",
 		"--graphics", fmt.Sprintf("vnc,listen=127.0.0.1,port=590%d", workerCount),
 		"--cdrom", fmt.Sprintf("%s/init.iso", nodeDir),
 		"--noautoconsole",
 	)
-	return nil
+	if err != nil {
+		//cleanup
+		cleanupErr := os.RemoveAll(nodeDir)
+		if cleanupErr != nil {
+			log.Println("could not clean up:", cleanupErr)
+		}
+	}
+	return err
+}
+
+func prepareIso(nodeDir string, workerCount int, wg *sync.WaitGroup, errorChannel chan<- error) {
+	defer wg.Done()
+	usr, err := user.Current()
+	if err != nil {
+		errorChannel <- err
+		return
+	}
+	sshPublicKeyFile := fmt.Sprintf("%s/.ssh/id_rsa.pub", usr.HomeDir)
+	sshPublicKey, err := ioutil.ReadFile(sshPublicKeyFile)
+
+	userDataFile := fmt.Sprintf("%s/user-data", nodeDir)
+	err = writeFile(userDataFile,
+		"#cloud-config",
+		"password: atomic",
+		"ssh_pwauth: True",
+		"chpasswd: { expire: False }",
+		"ssh_authorized_keys:",
+		fmt.Sprintf("  - %s", sshPublicKey),
+	)
+	if err != nil {
+		errorChannel <- err
+		return
+	}
+
+	metaDataFile := fmt.Sprintf("%s/meta-data", nodeDir)
+
+	err = writeFile(metaDataFile,
+		fmt.Sprintf("instance-id: atomic-host%d", workerCount),
+		fmt.Sprintf("local-hostname: atomic%d", workerCount),
+	)
+
+	if err != nil {
+		errorChannel <- err
+		return
+	}
+
+	isoPath := fmt.Sprintf("%s/init.iso", nodeDir)
+	err = run("genisoimage",
+		"-output", isoPath,
+		"-volid", "cidata", "-joliet", "-rock",
+		userDataFile, metaDataFile,
+	)
+	if err != nil {
+		errorChannel <- err
+		return
+	}
+}
+
+func unpackDisk(workDir, destPath string, wg *sync.WaitGroup, errorChannel chan<- error) {
+	defer wg.Done()
+
+	entries, err := readIndex(workDir)
+
+	if err != nil {
+		errorChannel <- err
+		return
+	}
+	latest := entries[len(entries)-1]
+	basePath := fmt.Sprintf("%s/base/images/%s", workDir, latest.fileName)
+
+	f, err := os.Open(basePath)
+
+	if err != nil {
+		errorChannel <- err
+		return
+	}
+	defer f.Close()
+	gzipReader, err := gzip.NewReader(f)
+	if err != nil {
+		errorChannel <- err
+		return
+	}
+
+	errorChannel <- writeToFile(gzipReader, destPath)
 }

@@ -43,12 +43,19 @@ func removeNodes(conn *libvirt.Connect, workDir string, nodeNumbers map[string]b
 }
 
 func removeNode(dom *libvirt.Domain, name, workDir string) error {
-	err := dom.Destroy()
+	active, err := dom.IsActive()
 	if err != nil {
 		return err
 	}
+	if active {
+		err := dom.Destroy()
+		if err != nil {
+			return err
+		}
+	}
 
-	err = dom.Undefine()
+	fmt.Printf("undefining %s\n", name)
+	err = dom.UndefineFlags(libvirt.DOMAIN_UNDEFINE_MANAGED_SAVE)
 	if err != nil {
 		return err
 	}
